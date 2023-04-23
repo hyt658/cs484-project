@@ -7,7 +7,8 @@ import torch.nn.functional as F
 from data import CIFARData, listToDataloader
 from CNN import ImageClassifier
 from collections import defaultdict
-
+from copy import deepcopy
+from torch.utils.data import DataLoader, ConcatDataset
 
 def getDeviceName():
     if (torch.cuda.is_available()):
@@ -18,25 +19,24 @@ def getDeviceName():
         return "cpu"
 
 
-def getBestTeacher(is_train):
+def getBestTeacher(is_train, label_data, test_data):
     teacher = ImageClassifier()
     train_loss = 0
     test_loss = 0
     test_accuracy = 0
-    deivce = getDeviceName()
-    teacher_path = os.path.join(MODEL_SAVE_PATH, "best_teacher_model_{}.pt".format(deivce))
+    teacher_path = os.path.join(MODEL_SAVE_PATH, "best_teacher_model.pt")
     find_save = os.path.exists(teacher_path)
 
     if find_save:
         # load from saved model
-        checkpoint = torch.load(teacher_path)
+        checkpoint = torch.load(os.path.join(MODEL_SAVE_PATH, "best_teacher_model.pt"))
 
     if not is_train:
         # check if we have model saved
         if not find_save:
             print("Saved teacher model is not detected, start training a new one...")
             is_train = True
-        
+
     if is_train:
         # train teacher model
         criterion = nn.CrossEntropyLoss()
@@ -46,7 +46,7 @@ def getBestTeacher(is_train):
         test_loss, test_accuracy = test(teacher, test_data, criterion)
 
         state = {
-            "model": teacher.state_dict(), 
+            "model": teacher.state_dict(),
             "train_loss": train_loss,
             "test_loss": test_loss,
             "accuracy": test_accuracy
@@ -63,15 +63,15 @@ def getBestTeacher(is_train):
     else:
         print("Load saved Teacher model...")
         teacher.load_state_dict(checkpoint["model"])
-    
+
     return teacher
 
 
-def train(model, dataloader, criterion, optimizer):
+def train(model, dataloader, criterion, optimizer, epochs=20):
     model.to(DEVICE)
     model.train()
 
-    for epoch in range(EPOCHES):
+    for epoch in range(epochs):
         best_train_loss = 0
         curr_train_loss = 0
         msg_len = 0
@@ -106,7 +106,7 @@ def train(model, dataloader, criterion, optimizer):
     return best_train_loss
 
 
-def predict(model, dataloader):
+def predict(model, dataloader, threshold=0.9):
     model.to(DEVICE)
     model.eval()
     msg_len = 0
@@ -136,24 +136,33 @@ def predict(model, dataloader):
             for idx in range(BATCH):
                 curr = data[idx]
                 for i, label in enumerate(topk_idx[idx]):
-                    sample_data[label].append((curr, topk[idx][i]))
+                    # 添加置信度阈值判断
+                    if topk[idx][i] > threshold:
+                        sample_data[label].append((curr, topk[idx][i]))
 
-            if ((batch_idx+1) % 10 == 0):
-                print(' ' * msg_len, end='\r')      # clean current line
+            if ((batch_idx + 1) % 10 == 0):
+                # clean current line
+                print(' ' * msg_len, end='\r')
                 databatch_count = len(dataloader)
                 percent = float(batch_idx / databatch_count * 100)
-                msg = "Progress: {}/{} ({:.1f}%)".format(batch_idx+1, databatch_count, percent)
+                msg = "Progress: {}/{} ({:.1f}%)".format(batch_idx + 1, databatch_count, percent)
                 print(msg, end='\r')
                 msg_len = len(msg)
-    
+
     # now base on sample_data, for each label, let the first 100
     #   data (sort in probability) that own this label
-    print("\nPacking prediction result...")
+
+    print(' ' * msg_len, end='\r')
+    print("Packing prediction result...")
     for label in sample_data:
         sort_func = lambda x: x[1]  # x[1] is the probability
         chosen = sorted(sample_data[label], key=sort_func)[:100]
         for data_prob_pair in chosen:
+            # print("Data shape:", curr.shape)
+            # print("Label:", label)
             result.append((data_prob_pair[0], label))
+
+    print(len(result))
 
     return result
 
@@ -185,43 +194,76 @@ def test(model, dataloader, criterion):
 
 
 if __name__ == "__main__":
-    EPOCHES = 80
-    BATCH = 50
-    DEVICE = torch.device(getDeviceName())
+    EPOCHS = 20
+    BATCH = 100
+    DEVICE = "cpu"
     MODEL_SAVE_PATH = "./saved_model"
+    THRESHOLD = 0.75
+    ACC_THRESHOLD = 0.01
+    STOP_THRESHOLD = 2
 
-    dataloader = CIFARData(batch_size=BATCH, num_workers=1)
+    dataloader = CIFARData(batch_size=BATCH, num_workers=4, unlabel_ratio=0.1)
     label_data = dataloader.labeled_train_loader
     unlabeled_data = dataloader.unlabeled_train_loader
     test_data = dataloader.test_loader
 
-    # get a teacher model (either train or load checkpoint)
-    teacher = getBestTeacher(is_train=True)
-
-    # use teacher to predict unlabeled data
-    print("Teacher starts to predict unlabeled data...")
-    prediction = predict(teacher, unlabeled_data)
-    pred_data = listToDataloader(prediction, batch_size=BATCH, num_workers=1)
-
-    # train the student with prediction data
-    student = ImageClassifier()
+    # get teacher model
+    teacher = getBestTeacher(is_train=True, label_data=label_data, test_data=test_data)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(student.parameters(), lr=0.001)
-    print("Student starts to be trained with prediction data...")
-    student_train_loss = train(student, pred_data, criterion, optimizer)
-    student_test_loss, student_test_accuracy = test(student, test_data, criterion)
+    optimizer = optim.Adam(teacher.parameters(), lr=0.001)
 
-    # finally tune student with labeled data
-    print("Student starts to be tuned with labeled data...")
-    student_train_loss = train(student, label_data, criterion, optimizer)
-    student_test_loss, student_test_accuracy = test(student, test_data, criterion)
+    # get teacher accuracy
+    teacher_test_loss, teacher_test_accuracy = test(teacher, test_data, criterion)
+    print(f"Teacher accuracy on test set: {teacher_test_accuracy:.4f}")
 
-    # save student model
-    # student_path = os.path.join(MODEL_SAVE_PATH, "best_student_model_{}.pt".format(getDeviceName()))
-    # state = {
-    #     "model": student.state_dict(), 
-    #     "train_loss": student_train_loss,
-    #     "test_loss": student_test_loss,
-    #     "accuracy": student_test_accuracy
-    # }
-    # torch.save(state, student_path)
+    improved = True
+    stop_count = 0
+    count = 0
+
+    while improved:
+        # Use teacher model to predict unlabelled data applying the threshold
+        print("Teacher starts to predict unlabeled data with threshold...")
+        prediction = predict(teacher, unlabeled_data, threshold=THRESHOLD)
+        pred_data = listToDataloader(prediction, batch_size=BATCH, num_workers=4)
+        combined_data = torch.utils.data.ConcatDataset([label_data.dataset, pred_data.dataset])
+        combined_data_loader = torch.utils.data.DataLoader(combined_data, batch_size=BATCH, shuffle=True, num_workers=4)
+
+        # use labelled data and (fake) new labelled data together to train a new student model
+        print("Student starts to be trained with prediction data...")
+        student = ImageClassifier()
+        # optimizer = optim.Adam(student.parameters(), lr=0.001)
+        # student_train_loss = train(student, label_data, criterion, optimizer)
+        optimizer = optim.Adam(student.parameters(), lr=0.001)
+        student_train_loss = train(student, combined_data_loader, criterion, optimizer)
+        student_test_loss, student_test_accuracy = test(student, test_data, criterion)
+
+        print("student accuracy on test:", student_test_accuracy)
+        print("teacher accuracy on test:", teacher_test_accuracy)
+
+        # accuracy improvement calculation
+        accuracy_improvement = student_test_accuracy - teacher_test_accuracy
+
+        # if student is worse than teacher, stop_count += 1
+        if accuracy_improvement < ACC_THRESHOLD:
+            stop_count += 1
+        else:
+            stop_count = 0
+
+        # if the performance  of the model has not been improved for several times, stop
+        if stop_count == STOP_THRESHOLD:
+            improved = False
+        elif accuracy_improvement > ACC_THRESHOLD:
+            # update teacher model to the better student model
+            teacher = deepcopy(student)
+            teacher_test_accuracy = student_test_accuracy
+            label_data = combined_data_loader
+
+        # count increment
+        count += 1
+
+        if count == EPOCHS:
+            improved = False
+
+    print(f"Final student accuracy on test set: {student_test_accuracy:.4f}")
+    # torch.save(student.state_dict(), MODEL_SAVE_PATH)
+

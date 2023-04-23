@@ -5,13 +5,13 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Subset, Dataset
 
 class CIFARData():
-    def __init__(self, batch_size, num_workers):
+    def __init__(self, batch_size, num_workers, unlabel_ratio):
         cifar10_path = "./data/cifar10"
         download = True
         
         # check if dataset has been downloaded
-        if os.path.isdir(os.path.join(cifar10_path, "cifar-10-batches-py")):
-            download = False
+        # if os.path.isdir(os.path.join(cifar10_path, "cifar-10-batches-py")):
+        #     download = False
 
         # Define the transforms for train data augmentation
         train_transform = transforms.Compose([
@@ -40,7 +40,7 @@ class CIFARData():
         np.random.shuffle(train_indices)
 
         # let 10% train data be the labeled, rest are unlabeled
-        split_pos = int(train_size * 0.1)
+        split_pos = int(train_size * unlabel_ratio)
         labeled_train_indices = train_indices[:split_pos]
         unlabeled_train_indices = train_indices[split_pos:]
 
