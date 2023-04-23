@@ -9,17 +9,27 @@ from CNN import ImageClassifier
 from collections import defaultdict
 
 
+def getDeviceName():
+    if (torch.cuda.is_available()):
+        return "cuda"
+    elif (torch.backends.mps.is_available()):
+        return "mps"
+    else:
+        return "cpu"
+
+
 def getBestTeacher(is_train):
     teacher = ImageClassifier()
     train_loss = 0
     test_loss = 0
     test_accuracy = 0
-    teacher_path = os.path.join(MODEL_SAVE_PATH, "best_teacher_model.pt")
+    deivce = getDeviceName()
+    teacher_path = os.path.join(MODEL_SAVE_PATH, "best_teacher_model_{}.pt".format(deivce))
     find_save = os.path.exists(teacher_path)
 
     if find_save:
         # load from saved model
-        checkpoint = torch.load(os.path.join(MODEL_SAVE_PATH, "best_teacher_model.pt"))
+        checkpoint = torch.load(teacher_path)
 
     if not is_train:
         # check if we have model saved
@@ -129,8 +139,7 @@ def predict(model, dataloader):
                     sample_data[label].append((curr, topk[idx][i]))
 
             if ((batch_idx+1) % 10 == 0):
-                # clean current line
-                print(' ' * msg_len, end='\r')
+                print(' ' * msg_len, end='\r')      # clean current line
                 databatch_count = len(dataloader)
                 percent = float(batch_idx / databatch_count * 100)
                 msg = "Progress: {}/{} ({:.1f}%)".format(batch_idx+1, databatch_count, percent)
@@ -139,8 +148,7 @@ def predict(model, dataloader):
     
     # now base on sample_data, for each label, let the first 100
     #   data (sort in probability) that own this label
-    print(' ' * msg_len, end='\r')
-    print("Packing prediction result...")
+    print("\nPacking prediction result...")
     for label in sample_data:
         sort_func = lambda x: x[1]  # x[1] is the probability
         chosen = sorted(sample_data[label], key=sort_func)[:100]
@@ -177,9 +185,9 @@ def test(model, dataloader, criterion):
 
 
 if __name__ == "__main__":
-    EPOCHES = 20
-    BATCH = 10
-    DEVICE = torch.device("mps")
+    EPOCHES = 80
+    BATCH = 50
+    DEVICE = torch.device(getDeviceName())
     MODEL_SAVE_PATH = "./saved_model"
 
     dataloader = CIFARData(batch_size=BATCH, num_workers=1)
@@ -188,7 +196,7 @@ if __name__ == "__main__":
     test_data = dataloader.test_loader
 
     # get a teacher model (either train or load checkpoint)
-    teacher = getBestTeacher(is_train=False)
+    teacher = getBestTeacher(is_train=True)
 
     # use teacher to predict unlabeled data
     print("Teacher starts to predict unlabeled data...")
@@ -207,3 +215,13 @@ if __name__ == "__main__":
     print("Student starts to be tuned with labeled data...")
     student_train_loss = train(student, label_data, criterion, optimizer)
     student_test_loss, student_test_accuracy = test(student, test_data, criterion)
+
+    # save student model
+    # student_path = os.path.join(MODEL_SAVE_PATH, "best_student_model_{}.pt".format(getDeviceName()))
+    # state = {
+    #     "model": student.state_dict(), 
+    #     "train_loss": student_train_loss,
+    #     "test_loss": student_test_loss,
+    #     "accuracy": student_test_accuracy
+    # }
+    # torch.save(state, student_path)
