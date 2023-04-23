@@ -2,9 +2,9 @@ import os
 import numpy as np
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, Dataset
 
-class Data():
+class CIFARData():
     def __init__(self, batch_size, num_workers):
         cifar10_path = "./data/cifar10"
         download = True
@@ -19,13 +19,15 @@ class Data():
             transforms.RandomRotation(83),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            transforms.Resize(32, antialias=True)
         ])
 
         # Define the transforms for test data augmentation
         test_transform = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            transforms.Resize(32, antialias=True)
         ])
 
         # obtain the train and test dataset
@@ -54,3 +56,18 @@ class Data():
         self.unlabeled_train_loader = unlabeled_train_loader
         self.test_loader = test_loader
 
+
+class CustomDataset(Dataset):
+    def __init__(self, data_list):
+        self.data = data_list
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+
+def listToDataloader(data_list, batch_size, num_workers):
+    dataset = CustomDataset(data_list)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
