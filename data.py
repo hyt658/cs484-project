@@ -58,16 +58,15 @@ class CIFARData():
 
 
 class CustomDataset(Dataset):
-    def __init__(self, data_list):
-        self.data = data_list
-
-    def __len__(self):
-        return len(self.data)
+    def __init__(self, dataset, indices):
+        self.dataset = dataset
+        self.indices = indices
 
     def __getitem__(self, index):
-        return self.data[index]
+        data, label = self.dataset[self.indices[index]]
+        return data, label
+
+    def __len__(self):
+        return len(self.indices)
 
 
-def listToDataloader(data_list, batch_size, num_workers):
-    dataset = CustomDataset(data_list)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
